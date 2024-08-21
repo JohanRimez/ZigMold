@@ -8,12 +8,51 @@ const sensordist = 10.0; // [pixels]
 const sensorangle = 45.0;
 const moldcount = 30000;
 
+// Start modes (cyclic enum)
+const StartMode = enum {
+    random,
+    dot,
+    circle,
+    pub fn next(actual: StartMode) StartMode {
+        const n = (@as(usize, @intFromEnum(actual)) + 1) % @typeInfo(StartMode).Enum.fields.len;
+        return @enumFromInt(n);
+    }
+};
+
 // Calculated parameters
 const sensorrad: comptime_float = sensorangle * std.math.rad_per_deg;
 var prng: std.Random.DefaultPrng = undefined;
-var height: u32 = undefined;
+var molds: [moldcount]Mold = undefined;
+var canvas: *sdl.SDL_Surface = undefined;
 var width: u32 = undefined;
+var height: u32 = undefined;
+var wFloat: f32 = undefined;
+var hFloat: f32 = undefined;
 var pixels: [*]u32 = undefined;
+var nextMode = StartMode.random;
+
+// Starting coordinates and heading
+fn StartPosition(mode: StartMode, x: *f32, y: *f32, heading: *f32) void {
+    const h: f32 = prng.random().float(f32) * std.math.tau;
+    const rand: f32 = prng.random().float(f32);
+    switch (mode) {
+        StartMode.random => {
+            x.* = prng.random().float(f32) * wFloat;
+            y.* = prng.random().float(f32) * hFloat;
+            heading.* = h;
+        },
+        StartMode.dot => {
+            x.* = wFloat / 2.0 + 10.0 * prng.random().float(f32) - 5.0;
+            y.* = hFloat / 2.0 + 10.0 * prng.random().float(f32) - 5.0;
+            heading.* = h;
+        },
+        StartMode.circle => {
+            x.* = wFloat / 2 - (200.0 + 10.0 * rand) * @cos(h);
+            y.* = hFloat / 2 - (200.0 + 10.0 * rand) * @sin(h);
+            heading.* = h;
+        },
+    }
+}
 
 // Molds
 const Mold = struct {
@@ -22,20 +61,17 @@ const Mold = struct {
     heading: f32,
     vx: f32,
     vy: f32,
-    wf: f32,
-    hf: f32,
-    pub fn init() Mold {
-        const heading: f32 = prng.random().float(f32) * 2.0 * std.math.pi;
-        const wf = @as(f32, @floatFromInt(width));
-        const hf = @as(f32, @floatFromInt(height));
+    pub fn init(mode: StartMode) Mold {
+        var xp: f32 = undefined;
+        var yp: f32 = undefined;
+        var h: f32 = undefined;
+        StartPosition(mode, &xp, &yp, &h);
         return .{
-            .x = prng.random().float(f32) * wf,
-            .y = prng.random().float(f32) * hf,
-            .heading = heading,
-            .vx = @cos(heading),
-            .vy = @sin(heading),
-            .wf = wf,
-            .hf = hf,
+            .x = xp,
+            .y = yp,
+            .heading = h,
+            .vx = @cos(h),
+            .vy = @sin(h),
         };
     }
     pub fn posindex(self: Mold) u32 {
@@ -45,13 +81,13 @@ const Mold = struct {
     }
     fn getsensor(self: Mold, angle: f32) u8 {
         const a = self.heading + angle;
-        const sensX: u32 = @as(u32, @intFromFloat(@mod(self.x + sensordist * @cos(a) + self.wf, self.wf)));
-        const sensY: u32 = @as(u32, @intFromFloat(@mod(self.y + sensordist * @sin(a) + self.hf, self.hf)));
+        const sensX: u32 = @as(u32, @intFromFloat(@mod(self.x + sensordist * @cos(a) + wFloat, wFloat)));
+        const sensY: u32 = @as(u32, @intFromFloat(@mod(self.y + sensordist * @sin(a) + hFloat, hFloat)));
         return @intCast(pixels[width * sensY + sensX] & 0xff);
     }
     pub fn update(self: *Mold) void {
-        self.*.x = @mod(self.x + self.vx + self.wf, self.wf);
-        self.*.y = @mod(self.y + self.vy + self.hf, self.hf);
+        self.*.x = @mod(self.x + self.vx + wFloat, wFloat);
+        self.*.y = @mod(self.y + self.vy + hFloat, hFloat);
         const sensF: u8 = self.getsensor(0.0);
         const sensL: u8 = self.getsensor(-sensorrad);
         const sensR: u8 = self.getsensor(sensorrad);
@@ -67,6 +103,12 @@ const Mold = struct {
         self.vy = @sin(self.heading);
     }
 };
+
+fn RestartPopulation() void {
+    _ = sdl.SDL_FillRect(canvas, null, sdl.SDL_MapRGB(canvas.format, 0, 0, 0));
+    for (&molds) |*mold| mold.* = Mold.init(nextMode);
+    nextMode = StartMode.next(nextMode);
+}
 
 pub fn main() !void {
     // initialise Randomizer
@@ -84,12 +126,14 @@ pub fn main() !void {
         return error.sdl_windowcreationfailed;
     };
     defer sdl.SDL_DestroyWindow(window);
-    const canvas: *sdl.SDL_Surface = sdl.SDL_GetWindowSurface(window) orelse {
+    canvas = sdl.SDL_GetWindowSurface(window) orelse {
         std.debug.print("SDL window surface creation failed: {s}\n", .{sdl.SDL_GetError()});
         return error.sld_surfacecreationfailed;
     };
     width = @intCast(canvas.w);
     height = @intCast(canvas.h);
+    wFloat = @floatFromInt(width);
+    hFloat = @floatFromInt(height);
     pixels = @as([*]u32, @ptrCast(@alignCast(canvas.*.pixels)));
     const dotcolor = sdl.SDL_MapRGB(canvas.format, 255, 255, 255);
     std.debug.print("Window dimensions: {}x{}\n", .{ width, height });
@@ -110,12 +154,14 @@ pub fn main() !void {
     _ = sdl.SDL_ShowCursor(sdl.SDL_DISABLE);
 
     // Initialise Mold Population
-    var molds: [moldcount]Mold = undefined;
-    for (&molds) |*mold| mold.* = Mold.init();
+    RestartPopulation();
 
+    // Initialise loop
     var timer = try std.time.Timer.start();
     var stoploop = false;
     var event: sdl.SDL_Event = undefined;
+
+    // Do the loop!
     while (!stoploop) {
         timer.reset();
         _ = sdl.SDL_UpdateWindowSurface(window);
@@ -125,7 +171,11 @@ pub fn main() !void {
             mold.update();
         }
         while (sdl.SDL_PollEvent(&event) != 0) {
-            if (event.type == sdl.SDL_KEYDOWN) stoploop = true;
+            if (event.type == sdl.SDL_KEYDOWN) {
+                if (event.key.keysym.sym == sdl.SDLK_SPACE) {
+                    RestartPopulation();
+                } else stoploop = true;
+            }
         }
         const lap: u32 = @intCast(timer.read() / 1_000_000);
         if (lap < refreshrate) sdl.SDL_Delay(refreshrate - lap);
