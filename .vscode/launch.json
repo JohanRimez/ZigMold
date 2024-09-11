@@ -4,12 +4,13 @@
         {
             "type": "cppvsdbg",
             "request": "launch",
-            "name": "Debug",
+            "name": "Zig Debug",
             "program": "${workspaceFolder}/zig-out/bin/ZigMold.exe",
             "args": [],
             "cwd": "${workspaceFolder}/zig-out/bin/",
+            "console": "integratedTerminal",
             "preLaunchTask": "zig build",
-            "console": "integratedTerminal"
+            "stopAtEntry": false,
         },
     ]
 }

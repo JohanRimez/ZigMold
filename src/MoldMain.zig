@@ -1,11 +1,11 @@
 const std = @import("std");
-const sdl = @cImport(@cInclude("C:\\Users\\Public\\Includes\\SDL2\\include\\SDL.h"));
+const sdl = @import("SDLimport.zig");
 
 // parameters
 const refreshrate = 20; // [ms]
 const difffactor = 245; // [score on 255]
 const sensordist = 10.0; // [pixels]
-const sensorangle = 45.0;
+const sensorangle = 45.0; // [deg]
 const moldcount = 30000;
 
 // Start modes (cyclic enum)
